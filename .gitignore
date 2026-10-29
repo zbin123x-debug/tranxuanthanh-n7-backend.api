@@ -1,0 +1,24 @@
+# Build and publish output
+bin/
+obj/
+artifacts/
+publish/
+TestResults/
+
+# IDE and local tooling
+.vs/
+.idea/
+.vscode/
+*.user
+*.suo
+
+# Logs and local secrets/configuration
+logs/
+*.log
+.env
+.env.*
+appsettings.*.local.json
+appsettings.Local.json
+secrets.json
+Properties/PublishProfiles/*.pubxml
+Properties/PublishProfiles/*.pubxml.user

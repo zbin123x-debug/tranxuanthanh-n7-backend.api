@@ -1,0 +1,6 @@
+@TranXuanThanh_2380614806_N7_API_HostAddress = http://localhost:5110
+
+GET {{TranXuanThanh_2380614806_N7_API_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
