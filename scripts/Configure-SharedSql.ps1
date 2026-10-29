@@ -19,9 +19,12 @@ try {
     $builder['Encrypt'] = 'True'
     $builder['TrustServerCertificate'] = 'True'
 
-    $null = dotnet user-secrets init --project $project 2>&1
-    if ($LASTEXITCODE -ne 0) { throw 'Could not initialize .NET User Secrets.' }
     $secretsId = ([xml](Get-Content -LiteralPath $project -Raw)).Project.PropertyGroup.UserSecretsId | Select-Object -First 1
+    if ([string]::IsNullOrWhiteSpace($secretsId)) {
+        $null = dotnet user-secrets init --project $project 2>&1
+        if ($LASTEXITCODE -ne 0) { throw 'Could not initialize .NET User Secrets.' }
+        $secretsId = ([xml](Get-Content -LiteralPath $project -Raw)).Project.PropertyGroup.UserSecretsId | Select-Object -First 1
+    }
     if ([string]::IsNullOrWhiteSpace($secretsId)) { throw 'UserSecretsId is missing from the project.' }
 
     $folder = Join-Path $env:APPDATA "Microsoft\UserSecrets\$secretsId"
