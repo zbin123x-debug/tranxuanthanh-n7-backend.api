@@ -1,0 +1,53 @@
+﻿DANH SÁCH CHỨC NĂNG ỨNG DỤNG CHẤM CÔNG – NHÓM 7
+
+Mô tả
+Ứng dụng quản lý chấm công nhân viên, gồm ứng dụng Flutter cho nhân viên và quản trị viên, API ASP.NET Core và cơ sở dữ liệu SQL Server.
+Danh sách được tổng hợp từ source Backend và Flutter hiện tại. Chức năng có trong source không đồng nghĩa mọi chức năng đã được kiểm thử đầy đủ trên hosting production.
+
+1. Tài khoản và đăng nhập
+- Đăng ký tài khoản nhân viên.
+- Đăng nhập nhân viên và quản trị viên.
+- Xác minh email bằng OTP 6 chữ số; OTP hết hạn sau 5 phút và chỉ dùng một lần.
+- Gửi lại OTP có giới hạn; xác minh OTP trước khi cấp JWT.
+- Phân quyền theo vai trò Admin và Employee.
+- Tạo tài khoản quản trị viên đầu tiên qua chức năng bootstrap admin.
+
+2. Chức năng nhân viên
+- Xem trang cá nhân và bảng điều khiển nhân viên.
+- Xem lịch ca được phân công.
+- Xem lịch sử chấm công.
+- Chấm công vào/ra; gửi vị trí GPS để kiểm tra khu vực làm việc.
+- Gửi dữ liệu cảm biến chuyển động theo luồng nghiệp vụ chấm công.
+- Quét QR chấm công; mã QR có thời hạn và chỉ sử dụng một lần.
+- Gửi yêu cầu điều chỉnh giờ chấm công kèm lý do và xem trạng thái yêu cầu.
+
+3. Chức năng quản trị viên
+- Xem tổng quan chấm công và nhân sự.
+- Thêm, sửa, tìm kiếm, kích hoạt/vô hiệu hóa tài khoản nhân viên.
+- Tạo và cập nhật ca làm; phân ca cho nhân viên theo ngày.
+- Xem danh sách/chi tiết chấm công, báo cáo và thống kê.
+- Hiệu chỉnh hoặc hủy bản ghi chấm công; lưu nhật ký lý do thay đổi.
+- Quản lý địa điểm làm việc và bán kính GPS.
+- Xem và đánh dấu đã xem cảnh báo chấm công bất thường.
+- Duyệt hoặc từ chối yêu cầu điều chỉnh công.
+- Tạo mã QR dùng một lần và tạo/quản lý phiên QR chấm công theo lịch.
+
+4. Chức năng kỹ thuật
+- Backend ASP.NET Core 8 cung cấp REST API, xác thực JWT và phân quyền.
+- SQL Server được quản lý cấu trúc bằng Entity Framework Core migrations.
+- GET /health kiểm tra tình trạng API và kết nối database.
+- Swagger/OpenAPI hỗ trợ xem và thử API khi được bật.
+- Flutter Material 3, giao diện tiếng Việt, có màn hình theo vai trò Admin/Employee.
+
+5. Kịch bản demo gợi ý
+- Mở app với tài khoản Admin trên một thiết bị và tài khoản Employee trên điện thoại hoặc máy ảo khác.
+- Admin tạo ca, phân ca và tạo phiên/mã QR.
+- Employee đăng nhập, xem lịch, chấm công bằng GPS hoặc quét QR, sau đó xem lịch sử.
+- Employee gửi yêu cầu điều chỉnh công; Admin xem và duyệt/từ chối yêu cầu.
+- Admin xem báo cáo, cảnh báo bất thường và lịch sử thay đổi chấm công.
+
+Tình trạng cần lưu ý
+- Source có các màn hình và endpoint nêu trên.
+- API public trên SmarterASP.NET đã trả HTTP 500.30 trong lần kiểm tra trước; vì vậy hiện chưa thể xác nhận các luồng production hoạt động đầy đủ.
+- Cần kiểm tra lại /health trả HTTP 200, SQL connected, gửi/nhận OTP, GPS, QR và các thao tác Admin/Employee sau khi hosting khởi động thành công.
+- Chưa có rubric chi tiết của giảng viên trong project; danh sách này phản ánh các chức năng tìm thấy trong source hiện tại.
