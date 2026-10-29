@@ -7,11 +7,30 @@ namespace TranXuanThanh_2380614806_N7_API.Services;
 public interface IEmailSender
 {
     Task SendOtpAsync(string to, string code, CancellationToken cancellationToken);
+    Task SendPasswordResetOtpAsync(string to, string code, CancellationToken cancellationToken);
 }
 
 public sealed class SmtpEmailSender(IConfiguration configuration) : IEmailSender
 {
     public async Task SendOtpAsync(string to, string code, CancellationToken cancellationToken)
+    {
+        await SendAsync(
+            to,
+            "Mã xác minh đăng nhập – Chấm công Nhóm 7",
+            $"Mã OTP của bạn là {code}. Mã hết hạn sau 5 phút và chỉ dùng một lần. Nếu bạn không yêu cầu mã này, hãy bỏ qua email.",
+            cancellationToken);
+    }
+
+    public async Task SendPasswordResetOtpAsync(string to, string code, CancellationToken cancellationToken)
+    {
+        await SendAsync(
+            to,
+            "Mã đặt lại mật khẩu – Chấm công Nhóm 7",
+            $"Mã OTP đặt lại mật khẩu của bạn là {code}. Mã hết hạn sau 5 phút và chỉ dùng một lần. Nếu bạn không yêu cầu đặt lại mật khẩu, hãy bỏ qua email.",
+            cancellationToken);
+    }
+
+    private async Task SendAsync(string to, string subject, string body, CancellationToken cancellationToken)
     {
         var host = configuration["Smtp:Host"];
         var username = configuration["Smtp:Username"];
@@ -30,10 +49,10 @@ public sealed class SmtpEmailSender(IConfiguration configuration) : IEmailSender
         var message = new MimeMessage();
         message.From.Add(MailboxAddress.Parse(from!));
         message.To.Add(MailboxAddress.Parse(to));
-        message.Subject = "Mã xác minh đăng nhập – Chấm công Nhóm 7";
+        message.Subject = subject;
         message.Body = new TextPart("plain")
         {
-            Text = $"Mã OTP của bạn là {code}. Mã hết hạn sau 5 phút và chỉ dùng một lần. Nếu bạn không yêu cầu mã này, hãy bỏ qua email."
+            Text = body
         };
 
         using var client = new SmtpClient();

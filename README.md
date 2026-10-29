@@ -21,6 +21,8 @@ dotnet ef database update
 dotnet run
 ```
 
+Run the isolated API tests with `dotnet test tests/AttendanceN7.Api.Tests/AttendanceN7.Api.Tests.csproj`. The tests use an EF Core InMemory database and do not run migrations or connect to SQL Server.
+
 ### Gmail App Password
 
 1. Sign in to the Gmail account that will send OTP messages and enable Google 2-Step Verification.
@@ -43,6 +45,14 @@ Bootstrap the first Admin once after configuring `AdminBootstrap__Key` to a rand
 - Resending is limited to once per user per 60 seconds. A SQL Server application lock enforces a shared cap of 400 OTP requests in a rolling 24-hour window across API instances; failed delivery attempts count toward the cap. Google documents 500 outgoing messages per day for standard Gmail accounts, so the app cap leaves a 100-message buffer for other mail sent from the account. Gmail can still apply additional account-specific limits ([Gmail sending limits](https://support.google.com/mail/answer/22839)).
 - `POST /api/auth/resend-otp` accepts `{ "username": "..." }`; it sends to the email already stored for that account and never accepts a recipient address from the client.
 
+### Forgot password with email OTP
+
+In Swagger, use `POST /api/auth/password-reset/request` with `{ "username": "thanh" }`. The API sends a password-reset OTP only to the active account's email already stored in `Users.Email`; it does not accept a destination email from the request. The response is intentionally identical for existing, inactive, unknown, or throttled accounts.
+
+Then use `POST /api/auth/password-reset/confirm` with `{ "username": "thanh", "code": "123456", "newPassword": "a-new-strong-password", "confirmPassword": "a-new-strong-password" }`. The password must be 10–128 characters. A valid OTP is single-use, expires after five minutes, and allows at most five attempts. Sending is limited to once per account every 60 seconds and shares the 400-requests-per-24-hours OTP cap. The new password is stored with the same ASP.NET `PasswordHasher<AppUser>` used by registration. The reset does not change the account ID, role, email-verification flag, or other records. Because the OTP proves control of the registered email, an existing account with `EmailVerified=false` can reset its password; its normal login OTP flow can verify that email afterward.
+
+These endpoints use the existing `OtpChallenges` table and require no database migration. Tests use an isolated EF Core InMemory database and never connect to a local or production SQL Server database.
+
 ## Production deployment
 
 Build a container with `docker build -t attendance-n7-api:latest .` or publish with `dotnet publish -c Release`. Put it behind a TLS reverse proxy (for example, Caddy or Nginx) and expose only HTTPS to clients. Configure these values in the hosting provider's secret/environment settings before startup:
@@ -64,7 +74,7 @@ In Development, Swagger UI is available at `http://localhost:5110/swagger` (HTTP
 
 ## Endpoints
 
-- `POST /api/auth/register`, `/api/auth/login`, `/api/auth/verify-otp`, `/api/auth/bootstrap-admin`; authenticated `GET /api/auth/me`
+- `POST /api/auth/register`, `/api/auth/login`, `/api/auth/verify-otp`, `/api/auth/password-reset/request`, `/api/auth/password-reset/confirm`, `/api/auth/bootstrap-admin`; authenticated `GET /api/auth/me`
 - `GET /api/attendance/mine`, `GET /api/attendance/schedule`, `POST /api/attendance/mark`
 - Employee: `GET /api/attendance/mine/adjustments`, `POST /api/attendance/adjustment-requests`
 - Admin only: `/api/admin/overview`, `/api/admin/employees`, `/api/admin/shifts`, `/api/admin/employee-shifts`, `/api/admin/attendances`, `/api/admin/anomalies`, `/api/admin/adjustment-requests`, `POST /api/admin/qr-token`, `POST /api/admin/qr-sessions`, `GET /api/admin/qr-sessions/active`, `GET /api/admin/qr-sessions/{id}`
