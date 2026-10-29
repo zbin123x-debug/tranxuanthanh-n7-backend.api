@@ -39,6 +39,24 @@ public sealed class AttendanceController(AppDbContext db, IConfiguration config)
         return Ok(items);
     }
 
+    [HttpGet("qr-session/active")]
+    public async Task<IActionResult> ActiveQrSession(CancellationToken ct)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var active = await db.AttendanceQrSessions
+            .Where(x => x.StartsAtUtc <= now && x.EndsAtUtc > now)
+            .OrderByDescending(x => x.StartsAtUtc)
+            .FirstOrDefaultAsync(ct);
+        if (active is not null)
+            return Ok(new { active = true, active.Id, active.StartsAtUtc, active.EndsAtUtc, token = CreateQrSessionToken(active.Id) });
+
+        var next = await db.AttendanceQrSessions
+            .Where(x => x.StartsAtUtc > now)
+            .OrderBy(x => x.StartsAtUtc)
+            .FirstOrDefaultAsync(ct);
+        return Ok(new { active = false, nextStartsAtUtc = next?.StartsAtUtc, nextEndsAtUtc = next?.EndsAtUtc });
+    }
+
     [HttpGet("mine/adjustments")]
     public async Task<IActionResult> MyAdjustmentRequests(CancellationToken ct)
     {
@@ -187,6 +205,14 @@ public sealed class AttendanceController(AppDbContext db, IConfiguration config)
             return (Distance(latitude, longitude, lat, lon), "Vị trí công ty (cấu hình hiện tại)");
 
         return (null, null);
+    }
+
+    private string CreateQrSessionToken(int id)
+    {
+        var secret = config["Jwt:Secret"] ?? Environment.GetEnvironmentVariable("Jwt__Secret");
+        if (string.IsNullOrWhiteSpace(secret)) throw new InvalidOperationException("JWT signing key is unavailable.");
+        var digest = HMACSHA256.HashData(Encoding.UTF8.GetBytes(secret), Encoding.UTF8.GetBytes($"attendance-qr-session:{id}"));
+        return Convert.ToHexString(digest);
     }
     private static double Distance(double lat1, double lon1, double lat2, double lon2)
     {

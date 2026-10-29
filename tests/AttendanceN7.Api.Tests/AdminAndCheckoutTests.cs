@@ -1,4 +1,6 @@
 using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -60,6 +62,35 @@ public sealed class AdminAndCheckoutTests
         Assert.True(attendance.CheckOutDistanceMeters > 20);
         Assert.Equal("Office", attendance.CheckOutWorkLocationName);
         Assert.Contains(await db.AttendanceAnomalies.ToListAsync(), x => x.Reason.Contains("ngoài bán kính 20 m"));
+    }
+
+    [Fact]
+    public async Task ActiveQrSession_ReturnsTheSameTokenUsedByAttendanceValidation()
+    {
+        const string secret = "test-signing-secret-with-at-least-32-characters";
+        await using var db = CreateDb();
+        var session = new AttendanceQrSession
+        {
+            StartsAtUtc = DateTimeOffset.UtcNow.AddMinutes(-1),
+            EndsAtUtc = DateTimeOffset.UtcNow.AddMinutes(30),
+            CreatedByUserId = 1,
+            TokenHash = "pending"
+        };
+        db.AttendanceQrSessions.Add(session);
+        await db.SaveChangesAsync();
+        var token = Convert.ToHexString(HMACSHA256.HashData(Encoding.UTF8.GetBytes(secret), Encoding.UTF8.GetBytes($"attendance-qr-session:{session.Id}")));
+        session.TokenHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
+        await db.SaveChangesAsync();
+
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["Jwt:Secret"] = secret })
+            .Build();
+        var controller = new AttendanceController(db, config);
+        var response = Assert.IsType<OkObjectResult>(await controller.ActiveQrSession(CancellationToken.None));
+        var value = response.Value!;
+
+        Assert.Equal(true, value.GetType().GetProperty("active")!.GetValue(value));
+        Assert.Equal(token, value.GetType().GetProperty("token")!.GetValue(value));
     }
 
     private static AppDbContext CreateDb()
