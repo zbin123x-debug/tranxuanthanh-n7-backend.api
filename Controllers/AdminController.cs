@@ -15,6 +15,7 @@ namespace TranXuanThanh_2380614806_N7_API.Controllers;
 [ApiController, Authorize(Roles = "Admin"), Route("api/admin")]
 public sealed class AdminController(AppDbContext db, IConfiguration config) : ControllerBase
 {
+    private const double AttendanceRadiusMeters = 20d;
     public sealed record ShiftRequest(string Name, TimeOnly StartTime, TimeOnly EndTime);
     public sealed record CreateEmployeeRequest(string FullName, string Username, string Email, string Password);
     public sealed record EmployeeRequest(string FullName, string Email, bool IsActive);
@@ -43,23 +44,23 @@ public sealed class AdminController(AppDbContext db, IConfiguration config) : Co
         });
     }
     [HttpGet("employees")]
-    public async Task<IActionResult> Employees([FromQuery] string? search, CancellationToken ct)
+    public async Task<IActionResult> Employees([FromQuery] string? search, [FromQuery] bool includeDeleted, CancellationToken ct)
     {
-        var query = db.Users.Where(x => x.Role == "Employee");
+        var query = db.Users.Where(x => x.Role == "Employee" && (includeDeleted || !x.IsDeleted));
         if (!string.IsNullOrWhiteSpace(search))
         {
             var term = search.Trim();
             query = query.Where(x => x.FullName.Contains(term) || x.Username.Contains(term) || x.Email.Contains(term));
         }
         return Ok(await query.OrderBy(x => x.FullName)
-            .Select(x => new { x.Id, x.FullName, x.Username, x.Email, x.IsActive, x.CreatedAtUtc })
+            .Select(x => new { x.Id, x.FullName, x.Username, x.Email, x.IsActive, x.IsDeleted, x.CreatedAtUtc })
             .Take(500).ToListAsync(ct));
     }
     [HttpGet("employees/{id:int}")]
     public async Task<IActionResult> EmployeeDetail(int id, CancellationToken ct)
     {
         var x = await db.Users.Where(x => x.Id == id && x.Role == "Employee")
-            .Select(x => new { x.Id, x.FullName, x.Username, x.Email, x.IsActive, x.CreatedAtUtc })
+            .Select(x => new { x.Id, x.FullName, x.Username, x.Email, x.IsActive, x.IsDeleted, x.CreatedAtUtc })
             .FirstOrDefaultAsync(ct);
         return x is null ? NotFound() : Ok(x);
     }
@@ -86,10 +87,11 @@ public sealed class AdminController(AppDbContext db, IConfiguration config) : Co
         return CreatedAtAction(nameof(EmployeeDetail), new { id = employee.Id },
             new { employee.Id, employee.FullName, employee.Username, employee.Email, employee.IsActive, employee.CreatedAtUtc });
     }
+
     [HttpPut("employees/{id:int}")]
     public async Task<IActionResult> UpdateEmployee(int id, EmployeeRequest request, CancellationToken ct)
     {
-        var x = await db.Users.FirstOrDefaultAsync(x => x.Id == id && x.Role == "Employee", ct);
+        var x = await db.Users.FirstOrDefaultAsync(x => x.Id == id && x.Role == "Employee" && !x.IsDeleted, ct);
         if (x is null) return NotFound();
         if (string.IsNullOrWhiteSpace(request.FullName) || string.IsNullOrWhiteSpace(request.Email) || !new System.ComponentModel.DataAnnotations.EmailAddressAttribute().IsValid(request.Email)) return BadRequest(new { message = "Thông tin nhân viên không hợp lệ." });
         var email = request.Email.Trim();
@@ -100,7 +102,17 @@ public sealed class AdminController(AppDbContext db, IConfiguration config) : Co
         await db.SaveChangesAsync(ct); return Ok(new { x.Id, x.FullName, x.Username, x.Email, x.IsActive });
     }
     [HttpPatch("employees/{id:int}/active")]
-    public async Task<IActionResult> SetEmployeeActive(int id,[FromQuery]bool active,CancellationToken ct){var x=await db.Users.FirstOrDefaultAsync(x=>x.Id==id&&x.Role=="Employee",ct);if(x is null)return NotFound();x.IsActive=active;await db.SaveChangesAsync(ct);return NoContent();}
+    public async Task<IActionResult> SetEmployeeActive(int id,[FromQuery]bool active,CancellationToken ct){var x=await db.Users.FirstOrDefaultAsync(x=>x.Id==id&&x.Role=="Employee"&&!x.IsDeleted,ct);if(x is null)return NotFound();x.IsActive=active;await db.SaveChangesAsync(ct);return NoContent();}
+    [HttpDelete("employees/{id:int}")]
+    public async Task<IActionResult> DeleteEmployee(int id, CancellationToken ct)
+    {
+        var employee = await db.Users.FirstOrDefaultAsync(x => x.Id == id && x.Role == "Employee" && !x.IsDeleted, ct);
+        if (employee is null) return NotFound();
+        employee.IsActive = false;
+        employee.IsDeleted = true;
+        await db.SaveChangesAsync(ct);
+        return NoContent();
+    }
     [HttpGet("shifts")]
     public async Task<IActionResult> Shifts(CancellationToken ct)=>Ok(await db.Shifts.OrderBy(x=>x.StartTime).ToListAsync(ct));
     [HttpPost("shifts")]
@@ -140,7 +152,8 @@ public sealed class AdminController(AppDbContext db, IConfiguration config) : Co
         }
         return Ok(await query.OrderByDescending(x => x.CheckInUtc).Take(500)
             .Select(x => new { x.Id, x.UserId, x.User.FullName, x.User.Username, x.CheckInUtc,
-                x.CheckOutUtc, x.Latitude, x.Longitude, x.DistanceMeters, distanceKilometers = x.DistanceMeters / 1000d, x.WorkLocationName, x.MotionMagnitude,
+                x.CheckOutUtc, x.Latitude, x.Longitude, x.DistanceMeters, distanceKilometers = x.DistanceMeters / 1000d, x.WorkLocationName,
+                x.CheckOutLatitude, x.CheckOutLongitude, x.CheckOutDistanceMeters, x.CheckOutWorkLocationName, x.MotionMagnitude,
                 x.Status, x.IsCancelled }).ToListAsync(ct));
     }
     [HttpGet("attendances/{id:int}")]
@@ -149,7 +162,9 @@ public sealed class AdminController(AppDbContext db, IConfiguration config) : Co
         var item = await db.Attendances.AsNoTracking().Include(x => x.User)
             .Where(x => x.Id == id).Select(x => new { x.Id, x.UserId, x.User.FullName,
                 x.User.Username, x.CheckInUtc, x.CheckOutUtc, x.Latitude, x.Longitude,
-                x.DistanceMeters, distanceKilometers = x.DistanceMeters / 1000d, x.WorkLocationName, x.MotionMagnitude, x.Status, x.IsCancelled }).FirstOrDefaultAsync(ct);
+                x.DistanceMeters, distanceKilometers = x.DistanceMeters / 1000d, x.WorkLocationName,
+                x.CheckOutLatitude, x.CheckOutLongitude, x.CheckOutDistanceMeters, x.CheckOutWorkLocationName,
+                x.MotionMagnitude, x.Status, x.IsCancelled }).FirstOrDefaultAsync(ct);
         if (item is null) return NotFound();
         var history = await db.AttendanceAuditLogs.AsNoTracking().Where(x => x.AttendanceId == id)
             .OrderByDescending(x => x.ChangedAtUtc)
@@ -201,7 +216,7 @@ public sealed class AdminController(AppDbContext db, IConfiguration config) : Co
     {
         var hasDatabaseLocations = await db.CompanyWorkLocations.AnyAsync(ct);
         var locations = await db.CompanyWorkLocations.Where(x => x.IsActive).OrderBy(x => x.Name)
-            .Select(x => new WorkLocationResponse(x.Id, x.Name, x.Latitude, x.Longitude, x.RadiusMeters, x.IsActive, false))
+            .Select(x => new WorkLocationResponse(x.Id, x.Name, x.Latitude, x.Longitude, 20d, x.IsActive, false))
             .ToListAsync(ct);
         if (!hasDatabaseLocations && locations.Count == 0 && TryGetLegacyLocation(out var legacy))
             locations.Add(legacy!);
@@ -216,11 +231,11 @@ public sealed class AdminController(AppDbContext db, IConfiguration config) : Co
         var item = new CompanyWorkLocation
         {
             Name = request.Name.Trim(), Latitude = request.Latitude, Longitude = request.Longitude,
-            RadiusMeters = request.RadiusMeters, CreatedAtUtc = now, UpdatedAtUtc = now
+            RadiusMeters = 20d, CreatedAtUtc = now, UpdatedAtUtc = now
         };
         db.CompanyWorkLocations.Add(item);
         await db.SaveChangesAsync(ct);
-        return Ok(new WorkLocationResponse(item.Id, item.Name, item.Latitude, item.Longitude, item.RadiusMeters, item.IsActive, false));
+        return Ok(new WorkLocationResponse(item.Id, item.Name, item.Latitude, item.Longitude, 20d, item.IsActive, false));
     }
 
     [HttpPut("work-locations/{id:int}")]
@@ -231,17 +246,17 @@ public sealed class AdminController(AppDbContext db, IConfiguration config) : Co
         {
             if (!TryGetLegacyLocation(out _)) return NotFound();
             var now = DateTime.UtcNow;
-            var migrated = new CompanyWorkLocation { Name = request.Name.Trim(), Latitude = request.Latitude, Longitude = request.Longitude, RadiusMeters = request.RadiusMeters, CreatedAtUtc = now, UpdatedAtUtc = now };
+            var migrated = new CompanyWorkLocation { Name = request.Name.Trim(), Latitude = request.Latitude, Longitude = request.Longitude, RadiusMeters = 20d, CreatedAtUtc = now, UpdatedAtUtc = now };
             db.CompanyWorkLocations.Add(migrated);
             await db.SaveChangesAsync(ct);
-            return Ok(new WorkLocationResponse(migrated.Id, migrated.Name, migrated.Latitude, migrated.Longitude, migrated.RadiusMeters, true, false));
+            return Ok(new WorkLocationResponse(migrated.Id, migrated.Name, migrated.Latitude, migrated.Longitude, 20d, true, false));
         }
         var item = await db.CompanyWorkLocations.FirstOrDefaultAsync(x => x.Id == id && x.IsActive, ct);
         if (item is null) return NotFound();
         item.Name = request.Name.Trim(); item.Latitude = request.Latitude; item.Longitude = request.Longitude;
-        item.RadiusMeters = request.RadiusMeters; item.UpdatedAtUtc = DateTime.UtcNow;
+        item.RadiusMeters = 20d; item.UpdatedAtUtc = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
-        return Ok(new WorkLocationResponse(item.Id, item.Name, item.Latitude, item.Longitude, item.RadiusMeters, item.IsActive, false));
+        return Ok(new WorkLocationResponse(item.Id, item.Name, item.Latitude, item.Longitude, 20d, item.IsActive, false));
     }
 
     [HttpDelete("work-locations/{id:int}")]
@@ -269,7 +284,7 @@ public sealed class AdminController(AppDbContext db, IConfiguration config) : Co
         !string.IsNullOrWhiteSpace(request.Name) && request.Name.Trim().Length <= 100 &&
         double.IsFinite(request.Latitude) && Math.Abs(request.Latitude) <= 90 &&
         double.IsFinite(request.Longitude) && Math.Abs(request.Longitude) <= 180 &&
-        double.IsFinite(request.RadiusMeters) && request.RadiusMeters is >= 5 and <= 50000;
+        double.IsFinite(request.RadiusMeters) && request.RadiusMeters == 20d;
 
     private bool TryGetLegacyLocation(out WorkLocationResponse? location)
     {
@@ -277,8 +292,7 @@ public sealed class AdminController(AppDbContext db, IConfiguration config) : Co
         if (!double.TryParse(config["WorkLocation:Latitude"], NumberStyles.Float, CultureInfo.InvariantCulture, out var latitude) ||
             !double.TryParse(config["WorkLocation:Longitude"], NumberStyles.Float, CultureInfo.InvariantCulture, out var longitude) ||
             Math.Abs(latitude) > 90 || Math.Abs(longitude) > 180) return false;
-        var radius = double.TryParse(config["WorkLocation:RadiusMeters"], NumberStyles.Float, CultureInfo.InvariantCulture, out var configuredRadius) && configuredRadius is >= 5 and <= 50000 ? configuredRadius : 250d;
-        location = new WorkLocationResponse(0, "Vị trí công ty (cấu hình hiện tại)", latitude, longitude, radius, true, true);
+        location = new WorkLocationResponse(0, "Vị trí công ty (cấu hình hiện tại)", latitude, longitude, AttendanceRadiusMeters, true, true);
         return true;
     }
     [HttpPost("anomalies/{id:int}/review")]

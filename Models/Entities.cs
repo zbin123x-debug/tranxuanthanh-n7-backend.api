@@ -11,6 +11,7 @@ public sealed class AppUser
     [MaxLength(500)] public string PasswordHash { get; set; } = "";
     [MaxLength(20)] public string Role { get; set; } = "Employee";
     public bool IsActive { get; set; } = true;
+    public bool IsDeleted { get; set; }
     public bool EmailVerified { get; set; }
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
     public List<OtpChallenge> OtpChallenges { get; set; } = [];
@@ -56,6 +57,10 @@ public sealed class AttendanceRecord
     public AppUser User { get; set; } = null!;
     public DateTime CheckInUtc { get; set; }
     public DateTime? CheckOutUtc { get; set; }
+    public double? CheckOutLatitude { get; set; }
+    public double? CheckOutLongitude { get; set; }
+    public double? CheckOutDistanceMeters { get; set; }
+    [MaxLength(120)] public string? CheckOutWorkLocationName { get; set; }
     public double? Latitude { get; set; }
     public double? Longitude { get; set; }
     public double? DistanceMeters { get; set; }

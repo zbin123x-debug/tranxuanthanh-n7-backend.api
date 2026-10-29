@@ -14,6 +14,8 @@ namespace TranXuanThanh_2380614806_N7_API.Controllers;
 [ApiController, Authorize, Route("api/attendance")]
 public sealed class AttendanceController(AppDbContext db, IConfiguration config) : ControllerBase
 {
+    private const double AttendanceRadiusMeters = 20d;
+    private const int LateGraceMinutes = 5;
     public sealed record MarkRequest(double Latitude, double Longitude, string Action = "check-in", string? QrToken = null, double? MotionMagnitude = null);
     public sealed record AdjustmentRequestDto(int? AttendanceId, DateTime? ProposedCheckInUtc, DateTime? ProposedCheckOutUtc, string Reason);
     [HttpGet("mine")]
@@ -78,7 +80,23 @@ public sealed class AttendanceController(AppDbContext db, IConfiguration config)
                 await db.SaveChangesAsync(ct);
                 return Conflict(new { message = "Không có lượt check-in đang mở; cảnh báo đã được ghi nhận." });
             }
-            record.CheckOutUtc = DateTime.UtcNow; await db.SaveChangesAsync(ct); return Ok(new { message = "Đã check-out.", record });
+            var (checkOutDistance, checkOutLocationName) = await MeasureWorkLocationAsync(request.Latitude, request.Longitude, ct);
+            record.CheckOutUtc = DateTime.UtcNow;
+            record.CheckOutLatitude = request.Latitude;
+            record.CheckOutLongitude = request.Longitude;
+            record.CheckOutDistanceMeters = checkOutDistance;
+            record.CheckOutWorkLocationName = checkOutLocationName;
+            if (checkOutDistance is > AttendanceRadiusMeters)
+                db.AttendanceAnomalies.Add(new AttendanceAnomaly
+                {
+                    UserId = userId,
+                    AttendanceId = record.Id,
+                    Reason = $"Check-out cách công ty {checkOutDistance:0} m, ngoài bán kính {AttendanceRadiusMeters:0} m."
+                });
+            await db.SaveChangesAsync(ct);
+            var checkoutArea = checkOutDistance is null ? "chưa xác minh được vị trí công ty" :
+                checkOutDistance <= AttendanceRadiusMeters ? "trong bán kính 20 m" : "ngoài bán kính 20 m";
+            return Ok(new { message = $"Đã check-out; vị trí {checkoutArea}.", record });
         }
         if (request.Action != "check-in") return BadRequest(new { message = "Action phải là check-in hoặc check-out." });
         AttendanceQrToken? qr = null;
@@ -111,11 +129,10 @@ public sealed class AttendanceController(AppDbContext db, IConfiguration config)
         var localDate = DateOnly.FromDateTime(localNow);
         var startTime = await db.EmployeeShifts.Where(x => x.UserId == userId && x.WorkDate == localDate && x.Shift.IsActive)
             .OrderBy(x => x.Shift.StartTime).Select(x => (TimeOnly?)x.Shift.StartTime).FirstOrDefaultAsync(ct);
-        var grace = int.TryParse(config["Attendance:LateGraceMinutes"], out var graceMinutes) ? Math.Clamp(graceMinutes, 0, 120) : 10;
-        var isLate = startTime.HasValue && TimeOnly.FromDateTime(localNow) > startTime.Value.AddMinutes(grace);
+        var isLateByTime = startTime.HasValue && TimeOnly.FromDateTime(localNow) > startTime.Value.AddMinutes(LateGraceMinutes);
         var activeWorkLocations = await db.CompanyWorkLocations.Where(x => x.IsActive).ToListAsync(ct);
         var hasManagedWorkLocations = activeWorkLocations.Count > 0 || await db.CompanyWorkLocations.AnyAsync(ct);
-        double radius = double.TryParse(config["WorkLocation:RadiusMeters"], NumberStyles.Float, CultureInfo.InvariantCulture, out var configuredRadius) && configuredRadius is >= 5 and <= 50000 ? configuredRadius : 250d;
+        var radius = AttendanceRadiusMeters;
         double? distance = null;
         string? workLocationName = null;
         if (activeWorkLocations.Count > 0)
@@ -124,7 +141,6 @@ public sealed class AttendanceController(AppDbContext db, IConfiguration config)
                 .Select(x => (Location: x, Distance: Distance(request.Latitude, request.Longitude, x.Latitude, x.Longitude)))
                 .MinBy(x => x.Distance);
             distance = nearest.Distance;
-            radius = nearest.Location.RadiusMeters;
             workLocationName = nearest.Location.Name;
         }
         else if (!hasManagedWorkLocations &&
@@ -135,7 +151,8 @@ public sealed class AttendanceController(AppDbContext db, IConfiguration config)
             distance = Distance(request.Latitude, request.Longitude, lat, lon);
             workLocationName = "Vị trí công ty (cấu hình hiện tại)";
         }
-        var status = distance is null ? "Unconfigured" : distance <= radius ? (isLate ? "Late" : "OnTime") : "OutsideGeofence";
+        var isOutsideGeofence = distance is > AttendanceRadiusMeters;
+        var status = distance is null ? "Unconfigured" : isLateByTime || isOutsideGeofence ? "Late" : "OnTime";
         var item = new AttendanceRecord { UserId = userId, CheckInUtc = nowUtc, Latitude = request.Latitude, Longitude = request.Longitude, DistanceMeters = distance, WorkLocationName = workLocationName, MotionMagnitude = request.MotionMagnitude, Status = status };
         if (qr is not null) { qr.UsedAtUtc = DateTime.UtcNow; item.QrTokenHash = qr.TokenHash; }
         else if (qrSession is not null) item.QrTokenHash = qrSession.TokenHash;
@@ -143,13 +160,33 @@ public sealed class AttendanceController(AppDbContext db, IConfiguration config)
         try { await db.SaveChangesAsync(ct); }
         catch (DbUpdateConcurrencyException) { return Conflict(new { message = "QR vừa được sử dụng ở một lượt chấm công khác." }); }
         if (distance.HasValue && distance > radius) db.AttendanceAnomalies.Add(new AttendanceAnomaly { UserId = userId, AttendanceId = item.Id, Reason = $"Chấm công ngoài vùng cho phép ({distance:0} m; bán kính {radius:0} m)." });
-        if (isLate) db.AttendanceAnomalies.Add(new AttendanceAnomaly { UserId = userId, AttendanceId = item.Id, Reason = $"Check-in trễ so với ca được phân công (bắt đầu {startTime}; cho phép trễ {grace} phút)." });
+        if (isLateByTime) db.AttendanceAnomalies.Add(new AttendanceAnomaly { UserId = userId, AttendanceId = item.Id, Reason = $"Check-in trễ so với ca được phân công (bắt đầu {startTime}; cho phép trễ {LateGraceMinutes} phút)." });
         var motionThreshold = double.TryParse(config["Attendance:MotionSpikeThreshold"], out var configuredThreshold) ? configuredThreshold : 20d;
         var motionSpike = request.MotionMagnitude is { } magnitude && magnitude > motionThreshold;
         if (motionSpike) db.AttendanceAnomalies.Add(new AttendanceAnomaly { UserId = userId, AttendanceId = item.Id, Reason = $"Mẫu gia tốc bất thường ({request.MotionMagnitude:0.0} m/s²; ngưỡng cảnh báo {motionThreshold:0.0} m/s²)." });
-        if (distance.HasValue && distance > radius || isLate || motionSpike) await db.SaveChangesAsync(ct);
-        var message = distance is null ? "Đã ghi nhận GPS; cần cấu hình tọa độ nơi làm việc để xác minh phạm vi." : distance > radius ? "Đã ghi nhận ngoài phạm vi và tạo cảnh báo." : isLate ? "Đã check-in trễ; cảnh báo được ghi nhận." : "Đã check-in trong phạm vi.";
+        if (distance.HasValue && distance > radius || isLateByTime || motionSpike) await db.SaveChangesAsync(ct);
+        var message = distance is null ? "Đã ghi nhận GPS; cần cấu hình tọa độ nơi làm việc để xác minh phạm vi." : isOutsideGeofence ? "Đã ghi nhận đi làm trễ: vị trí ngoài bán kính 20 m." : isLateByTime ? "Đã check-in trễ so với ca; cảnh báo được ghi nhận." : "Đã check-in trong phạm vi.";
         return Ok(new { message, item.Status, distanceMeters = distance, distanceKilometers = distance / 1000d, workLocationName, item.Id });
+    }
+
+    private async Task<(double? DistanceMeters, string? WorkLocationName)> MeasureWorkLocationAsync(double latitude, double longitude, CancellationToken ct)
+    {
+        var locations = await db.CompanyWorkLocations.Where(x => x.IsActive).ToListAsync(ct);
+        if (locations.Count > 0)
+        {
+            var nearest = locations
+                .Select(x => (Location: x, Distance: Distance(latitude, longitude, x.Latitude, x.Longitude)))
+                .MinBy(x => x.Distance);
+            return (nearest.Distance, nearest.Location.Name);
+        }
+
+        if (await db.CompanyWorkLocations.AnyAsync(ct)) return (null, null);
+        if (double.TryParse(config["WorkLocation:Latitude"], NumberStyles.Float, CultureInfo.InvariantCulture, out var lat) &&
+            double.TryParse(config["WorkLocation:Longitude"], NumberStyles.Float, CultureInfo.InvariantCulture, out var lon) &&
+            Math.Abs(lat) <= 90 && Math.Abs(lon) <= 180)
+            return (Distance(latitude, longitude, lat, lon), "Vị trí công ty (cấu hình hiện tại)");
+
+        return (null, null);
     }
     private static double Distance(double lat1, double lon1, double lat2, double lon2)
     {

@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
+    <AspNetCoreHostingModel>OutOfProcess</AspNetCoreHostingModel>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UserSecretsId>14784932-5fcd-4ce2-bdb2-da2740f23bc2</UserSecretsId>
@@ -12,8 +13,11 @@
     <None Remove="artifacts\**" />
     <Compile Remove="artifacts\**\*.cs" />
     <Compile Remove="tests\**\*.cs" />
+    <Compile Remove="tools\**\*.cs" />
     <Content Remove="tests\**" />
     <None Remove="tests\**" />
+    <Content Remove="tools\**" />
+    <None Remove="tools\**" />
   </ItemGroup>
 
   <ItemGroup>

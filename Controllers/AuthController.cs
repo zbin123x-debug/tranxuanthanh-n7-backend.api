@@ -22,7 +22,6 @@ public sealed class AuthController(
     ILogger<AuthController> logger) : ControllerBase
 {
     private const string SenderAddress = "zbin789x@gmail.com";
-    private const string RegistrationPurpose = "Registration";
     private const string LoginPurpose = "Login";
     private const string PasswordResetPurpose = "PasswordReset";
     private const int OtpLength = 6;
@@ -37,7 +36,6 @@ public sealed class AuthController(
     public sealed record ResendOtpRequest(string Username);
     public sealed record RequestPasswordResetRequest(string? Username);
     public sealed record ConfirmPasswordResetRequest(string? Username, string? Code, string? NewPassword, string? ConfirmPassword);
-    public sealed record BootstrapAdminRequest(string BootstrapKey, string FullName, string Username, string Email, string Password);
 
     private enum OtpSendStatus { Sent, UserCooldown, DailyLimit, NotConfigured, DeliveryFailed, LockUnavailable }
 
@@ -160,34 +158,6 @@ public sealed class AuthController(
         }
     }
 
-    [HttpPost("bootstrap-admin")]
-    public async Task<IActionResult> BootstrapAdmin(BootstrapAdminRequest request, CancellationToken ct)
-    {
-        var expected = config["AdminBootstrap:Key"] ?? Environment.GetEnvironmentVariable("AdminBootstrap__Key");
-        if (string.IsNullOrWhiteSpace(expected) || expected.Length < 32) return NotFound();
-        if (!CryptographicOperations.FixedTimeEquals(
-                Encoding.UTF8.GetBytes(expected),
-                Encoding.UTF8.GetBytes(request.BootstrapKey ?? ""))) return Unauthorized();
-        if (await db.Users.AnyAsync(x => x.Role == "Admin", ct))
-            return Conflict(new { message = "Admin đã được khởi tạo; bootstrap chỉ dùng một lần." });
-        if (request.Password.Length < 12 || !IsValidEmail(request.Email))
-            return BadRequest(new { message = "Email hoặc mật khẩu không hợp lệ." });
-
-        var user = new AppUser
-        {
-            FullName = request.FullName.Trim(),
-            Username = request.Username.Trim(),
-            Email = request.Email.Trim(),
-            Role = "Admin",
-            EmailVerified = false
-        };
-        user.PasswordHash = Hasher.HashPassword(user, request.Password);
-        db.Users.Add(user);
-        try { await db.SaveChangesAsync(ct); }
-        catch (DbUpdateException) { return Conflict(new { message = "Username hoặc email đã được sử dụng." }); }
-        return Created("", new { message = "Admin đã tạo. Lần đăng nhập đầu tiên sẽ gửi OTP đến email đã đăng ký." });
-    }
-
     [HttpPost("register")]
     public async Task<IActionResult> Register(RegisterRequest request, CancellationToken ct)
     {
@@ -217,16 +187,51 @@ public sealed class AuthController(
         try { await db.SaveChangesAsync(ct); }
         catch (DbUpdateException) { return Conflict(new { message = "Username hoặc email đã được sử dụng." }); }
 
-        var sendStatus = await SendOtpAsync(user, RegistrationPurpose, ct);
-        if (sendStatus != OtpSendStatus.Sent)
+        return StatusCode(StatusCodes.Status201Created, new
         {
-            return OtpFailure(sendStatus, accountCreated: true);
-        }
+            message = "Tài khoản Employee đã tạo. Xác minh email sẽ diễn ra khi đăng nhập lần đầu.",
+            id = user.Id,
+            username = user.Username,
+            emailVerified = user.EmailVerified
+        });
+    }
+
+    [HttpPost("register-admin"), Microsoft.AspNetCore.Authorization.AllowAnonymous]
+    public async Task<IActionResult> RegisterAdmin(RegisterRequest request, CancellationToken ct)
+    {
+        var fullName = request.FullName?.Trim() ?? "";
+        var username = request.Username?.Trim() ?? "";
+        var emailAddress = request.Email?.Trim() ?? "";
+        if (string.IsNullOrWhiteSpace(fullName) || fullName.Length > 100 ||
+            username.Length is < 3 or > 40 || !System.Text.RegularExpressions.Regex.IsMatch(username, "^[a-zA-Z0-9._-]+$") ||
+            !IsValidEmail(emailAddress) || emailAddress.Length > 254 ||
+            request.Password.Length < 10 || request.Password.Length > 128 || request.Password != request.ConfirmPassword)
+            return BadRequest(new { message = "ThÃ´ng tin khÃ´ng há»£p lá»‡. Máº­t kháº©u cáº§n tá»‘i thiá»ƒu 10 kÃ½ tá»± vÃ  xÃ¡c nháº­n pháº£i trÃ¹ng khá»›p." });
+
+        if (await db.Users.AnyAsync(u => u.Username == username || u.Email == emailAddress, ct))
+            return Conflict(new { message = "Username hoáº·c email Ä‘Ã£ Ä‘Æ°á»£c sá»­ dá»¥ng." });
+
+        var user = new AppUser
+        {
+            FullName = fullName,
+            Username = username,
+            Email = emailAddress,
+            Role = "Admin",
+            IsActive = true,
+            EmailVerified = false
+        };
+        user.PasswordHash = Hasher.HashPassword(user, request.Password);
+        db.Users.Add(user);
+        try { await db.SaveChangesAsync(ct); }
+        catch (DbUpdateException) { return Conflict(new { message = "Username hoáº·c email Ä‘Ã£ Ä‘Æ°á»£c sá»­ dá»¥ng." }); }
 
         return StatusCode(StatusCodes.Status201Created, new
         {
-            message = "Tài khoản Employee đã tạo. Mã OTP đã được gửi đến email cá nhân để xác minh.",
-            expiresInSeconds = 300
+            message = "TÃ i khoáº£n Admin Ä‘Ã£ táº¡o. ÄÄƒng nháº­p váº«n cáº§n OTP gá»­i Ä‘áº¿n email Ä‘Ã£ Ä‘Äƒng kÃ½.",
+            id = user.Id,
+            username = user.Username,
+            role = user.Role,
+            emailVerified = user.EmailVerified
         });
     }
 
@@ -239,8 +244,7 @@ public sealed class AuthController(
             return Unauthorized(new { message = "Tên đăng nhập hoặc mật khẩu không đúng." });
         if (!JwtConfigured()) return StatusCode(503, new { message = "JWT chưa được cấu hình an toàn trên backend." });
 
-        var purpose = user.EmailVerified ? LoginPurpose : RegistrationPurpose;
-        var sendStatus = await SendOtpAsync(user, purpose, ct);
+        var sendStatus = await SendOtpAsync(user, LoginPurpose, ct);
         if (sendStatus != OtpSendStatus.Sent) return OtpFailure(sendStatus);
 
         return Ok(new
@@ -259,8 +263,7 @@ public sealed class AuthController(
         if (user is null) return NotFound(new { message = "Không tìm thấy tài khoản đang hoạt động." });
         if (!JwtConfigured()) return StatusCode(503, new { message = "JWT chưa được cấu hình an toàn trên backend." });
 
-        var purpose = user.EmailVerified ? LoginPurpose : RegistrationPurpose;
-        var sendStatus = await SendOtpAsync(user, purpose, ct);
+        var sendStatus = await SendOtpAsync(user, LoginPurpose, ct);
         if (sendStatus != OtpSendStatus.Sent) return OtpFailure(sendStatus);
         return Ok(new
         {
@@ -279,10 +282,9 @@ public sealed class AuthController(
         if (user is null || !JwtConfigured() || code.Length != OtpLength || !code.All(char.IsDigit))
             return Unauthorized(new { message = "Mã OTP không hợp lệ hoặc đã hết hạn." });
 
-        var purpose = user.EmailVerified ? LoginPurpose : RegistrationPurpose;
         var now = DateTime.UtcNow;
         var challenge = await db.OtpChallenges
-            .Where(x => x.UserId == user.Id && x.Purpose == purpose && x.UsedAtUtc == null && x.ExpiresAtUtc > now)
+            .Where(x => x.UserId == user.Id && x.Purpose == LoginPurpose && x.UsedAtUtc == null && x.ExpiresAtUtc > now)
             .OrderByDescending(x => x.CreatedAtUtc)
             .FirstOrDefaultAsync(ct);
         if (challenge is null || challenge.Attempts >= MaxOtpAttempts)
@@ -299,7 +301,7 @@ public sealed class AuthController(
         }
 
         challenge.UsedAtUtc = now;
-        if (purpose == RegistrationPurpose) user.EmailVerified = true;
+        user.EmailVerified = true;
         var otherChallenges = await db.OtpChallenges
             .Where(x => x.UserId == user.Id && x.Id != challenge.Id && x.UsedAtUtc == null)
             .ToListAsync(ct);
@@ -429,7 +431,7 @@ public sealed class AuthController(
         }
     }
 
-    private IActionResult OtpFailure(OtpSendStatus status, bool accountCreated = false)
+    private IActionResult OtpFailure(OtpSendStatus status)
     {
         var message = status switch
         {
@@ -440,9 +442,6 @@ public sealed class AuthController(
             OtpSendStatus.LockUnavailable => "Dịch vụ OTP đang bận. Vui lòng thử lại sau.",
             _ => "Không thể gửi email OTP lúc này."
         };
-        if (accountCreated)
-            message += " Tài khoản đã được tạo nhưng email chưa xác minh; hãy chuyển sang đăng nhập để gửi lại OTP sau.";
-
         var statusCode = status is OtpSendStatus.UserCooldown or OtpSendStatus.DailyLimit
             ? StatusCodes.Status429TooManyRequests
             : StatusCodes.Status503ServiceUnavailable;

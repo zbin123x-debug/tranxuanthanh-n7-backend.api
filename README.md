@@ -15,7 +15,6 @@ dotnet user-secrets set "Smtp:Host" "smtp.gmail.com"
 dotnet user-secrets set "Smtp:Port" "587"
 dotnet user-secrets set "Smtp:Username" "zbin789x@gmail.com"
 dotnet user-secrets set "Smtp:From" "zbin789x@gmail.com"
-dotnet user-secrets set "AdminBootstrap:Key" "<one-time random secret, minimum 32 characters>"
 .\scripts\Set-GmailAppPassword.ps1
 dotnet ef database update
 dotnet run
@@ -34,12 +33,17 @@ Google may change the account settings flow. If App passwords is not available, 
 
 Environment variable names use double underscores, e.g. `Jwt__Secret`, `Smtp__Password`, and `ConnectionStrings__DefaultConnection`. If no JWT secret is configured in Development, the API still starts, but login intentionally returns 503. SMTP credentials are required to send OTP email.
 
-Bootstrap the first Admin once after configuring `AdminBootstrap__Key` to a random value of at least 32 characters. POST `/api/auth/bootstrap-admin` with that key, full name, username, email, and a strong password. Then remove the bootstrap key. Public registration always creates the `Employee` role.
+### Admin and Employee registration in Swagger
+
+- `POST /api/auth/register` creates an Employee.
+- `POST /api/auth/register-admin` creates an Admin. It is public and has no one-time limit; each request still requires a unique username and email and a password of at least 10 characters.
+- Both registration endpoints hash passwords with ASP.NET `PasswordHasher`, set `EmailVerified=false`, and send no OTP during account creation. Login continues to require Gmail OTP before issuing a JWT.
+- Because `register-admin` is public, anyone who can reach the production API can create an Admin account. Use it only while the course demo is open to public registration; disable the route after grading if the API will hold real attendance records.
 
 ### Central Gmail OTP flow
 
 - Every OTP email is sent **from** `zbin789x@gmail.com` through Gmail SMTP STARTTLS on port 587. The recipient is taken from that user's unique `Users.Email` value, so each employee or admin receives their own code.
-- Registration creates an Employee with an unverified email and sends an OTP immediately. Successful verification marks the email verified and returns a JWT. Existing accounts are marked verified by the additive migration so their existing login flow remains available.
+- Registration creates only an Employee with `EmailVerified=false`, stores the password with `PasswordHasher<AppUser>`, sends no OTP, and returns HTTP 201. The first successful login OTP marks the email verified and returns a JWT.
 - Login sends a fresh OTP only after the username and password are valid. JWTs are returned only after OTP verification. The account role is read from SQL Server and placed in the signed token.
 - Codes are six digits, expire after five minutes, are stored as an HMAC hash, and become invalid after one successful use or five failed entries. A new code invalidates any earlier unused code.
 - Resending is limited to once per user per 60 seconds. A SQL Server application lock enforces a shared cap of 400 OTP requests in a rolling 24-hour window across API instances; failed delivery attempts count toward the cap. Google documents 500 outgoing messages per day for standard Gmail accounts, so the app cap leaves a 100-message buffer for other mail sent from the account. Gmail can still apply additional account-specific limits ([Gmail sending limits](https://support.google.com/mail/answer/22839)).
@@ -57,6 +61,8 @@ These endpoints use the existing `OtpChallenges` table and require no database m
 
 Build a container with `docker build -t attendance-n7-api:latest .` or publish with `dotnet publish -c Release`. Put it behind a TLS reverse proxy (for example, Caddy or Nginx) and expose only HTTPS to clients. Configure these values in the hosting provider's secret/environment settings before startup:
 
+The project production API is `https://zbin123xgmailc-001-site1.ktempurl.com` and the online database is `db_ad06d2_tranxuanthanhn7`. Flutter defaults to that HTTPS API; it can still be overridden at build time with `--dart-define=API_BASE_URL=...`. The IIS publish profile is configured for out-of-process hosting. To prepare the SmarterASP.NET package locally, run `./scripts/Publish-IIS.ps1`; this creates `artifacts/deployment/api-iis-win-x64.zip` and does not upload or apply database changes.
+
 - `ASPNETCORE_ENVIRONMENT=Production`
 - Optional `Swagger__Enabled=true` to expose interactive API documentation at `/swagger` for a class demo. Leave unset/false for normal production use.
 - `ReverseProxy__TrustForwardedHeaders=true` only when the app listener is private and reachable solely through the trusted HTTPS proxy (the forwarded-header values are trusted)
@@ -66,15 +72,14 @@ Build a container with `docker build -t attendance-n7-api:latest .` or publish w
 - `WorkLocation__Latitude`, `WorkLocation__Longitude`, `WorkLocation__RadiusMeters`
 - Optional `WorkLocation__TimeZoneId` (defaults to `Asia/Ho_Chi_Minh`), `Attendance__LateGraceMinutes` (defaults to 10), and `Attendance__MotionSpikeThreshold` (defaults to 20 m/s²)
 - Optional browser origins as `Cors__AllowedOrigins__0`, `Cors__AllowedOrigins__1`, etc. (native Android does not need CORS)
-- Temporarily `AdminBootstrap__Key` only to create the first Admin
 
-Production startup fails closed if the SQL connection string or JWT secret is missing. For schema updates, generate and review an idempotent script with `dotnet ef migrations script --idempotent -o migrations.sql`, then run that script against the production database before switching the API version. The health endpoint is `GET /health`; it confirms both process availability and SQL Server connectivity. Configure TLS at the proxy and provide its public HTTPS URL to Flutter at build time. No public API URL or production database has been supplied, so this source has not been deployed.
+Production startup fails closed if the SQL connection string or JWT secret is missing. These authentication changes use the existing `Users` and `OtpChallenges` columns and indexes, so they require no database migration. Do not run migrations during deployment for this change. The health endpoint is `GET /health`; it confirms both process availability and SQL Server connectivity. Publishing prepares a ZIP only; hosting and online SQL remain untouched.
 
 In Development, Swagger UI is available at `http://localhost:5110/swagger` (HTTP profile) or `https://localhost:7205/swagger` (HTTPS profile). The UI includes a JWT Bearer Authorize control for trying protected endpoints. On a production host it stays disabled unless `Swagger__Enabled=true` is explicitly configured.
 
 ## Endpoints
 
-- `POST /api/auth/register`, `/api/auth/login`, `/api/auth/verify-otp`, `/api/auth/password-reset/request`, `/api/auth/password-reset/confirm`, `/api/auth/bootstrap-admin`; authenticated `GET /api/auth/me`
+- `POST /api/auth/register`, `/api/auth/login`, `/api/auth/verify-otp`, `/api/auth/password-reset/request`, `/api/auth/password-reset/confirm`; authenticated `GET /api/auth/me`
 - `GET /api/attendance/mine`, `GET /api/attendance/schedule`, `POST /api/attendance/mark`
 - Employee: `GET /api/attendance/mine/adjustments`, `POST /api/attendance/adjustment-requests`
 - Admin only: `/api/admin/overview`, `/api/admin/employees`, `/api/admin/shifts`, `/api/admin/employee-shifts`, `/api/admin/attendances`, `/api/admin/anomalies`, `/api/admin/adjustment-requests`, `POST /api/admin/qr-token`, `POST /api/admin/qr-sessions`, `GET /api/admin/qr-sessions/active`, `GET /api/admin/qr-sessions/{id}`

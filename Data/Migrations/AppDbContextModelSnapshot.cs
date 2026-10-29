@@ -50,6 +50,9 @@ namespace TranXuanThanh_2380614806_N7_API.Data.Migrations
                     b.Property<bool>("IsActive")
                         .HasColumnType("bit");
 
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("bit");
+
                     b.Property<string>("PasswordHash")
                         .IsRequired()
                         .HasMaxLength(500)
@@ -294,8 +297,21 @@ namespace TranXuanThanh_2380614806_N7_API.Data.Migrations
                     b.Property<DateTime>("CheckInUtc")
                         .HasColumnType("datetime2");
 
+                    b.Property<double?>("CheckOutDistanceMeters")
+                        .HasColumnType("float");
+
+                    b.Property<double?>("CheckOutLatitude")
+                        .HasColumnType("float");
+
+                    b.Property<double?>("CheckOutLongitude")
+                        .HasColumnType("float");
+
                     b.Property<DateTime?>("CheckOutUtc")
                         .HasColumnType("datetime2");
+
+                    b.Property<string>("CheckOutWorkLocationName")
+                        .HasMaxLength(120)
+                        .HasColumnType("nvarchar(120)");
 
                     b.Property<double?>("DistanceMeters")
                         .HasColumnType("float");

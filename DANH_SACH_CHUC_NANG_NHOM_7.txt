@@ -1,4 +1,4 @@
-﻿DANH SÁCH CHỨC NĂNG ỨNG DỤNG CHẤM CÔNG – NHÓM 7
+DANH SÁCH CHỨC NĂNG ỨNG DỤNG CHẤM CÔNG – NHÓM 7
 
 Mô tả
 Ứng dụng quản lý chấm công nhân viên, gồm ứng dụng Flutter cho nhân viên và quản trị viên, API ASP.NET Core và cơ sở dữ liệu SQL Server.
@@ -10,7 +10,7 @@ Danh sách được tổng hợp từ source Backend và Flutter hiện tại. C
 - Xác minh email bằng OTP 6 chữ số; OTP hết hạn sau 5 phút và chỉ dùng một lần.
 - Gửi lại OTP có giới hạn; xác minh OTP trước khi cấp JWT.
 - Phân quyền theo vai trò Admin và Employee.
-- Tạo tài khoản quản trị viên đầu tiên qua chức năng bootstrap admin.
+- Khởi tạo Admin riêng bởi chủ dự án; không cung cấp endpoint công khai để tự cấp quyền Admin.
 
 2. Chức năng nhân viên
 - Xem trang cá nhân và bảng điều khiển nhân viên.
